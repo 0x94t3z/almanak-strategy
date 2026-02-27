@@ -1,0 +1,25 @@
+.env
+
+# Python cache/build
+__pycache__/
+*.py[cod]
+*.so
+.pytest_cache/
+.mypy_cache/
+.coverage
+htmlcov/
+
+# Local environments
+.venv/
+venv/
+env/
+
+# IDE / OS
+.DS_Store
+.vscode/
+
+# Almanak local runtime state
+almanak_state.db
+almanak_state.db-shm
+almanak_state.db-wal
+almanak_docs_audit.txt
