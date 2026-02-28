@@ -10,6 +10,7 @@
 - **Config:** `config.json`
 - **Default Pair:** DEGEN/USDC on Base
 - **Default Protocol:** `uniswap_v3`
+- **Profile Version:** `2.6` (safer live defaults)
 
 ## Files
 
@@ -38,6 +39,9 @@ almanak strat run --once --dry-run --no-gateway --gateway-port 50130
 
 # Live run against existing gateway
 almanak strat run --once --no-gateway --gateway-port 50130
+
+# Continuous live run
+almanak strat run --no-gateway --gateway-port 50130
 ```
 
 ## Intent Types Used
@@ -59,7 +63,18 @@ All intents are created via `from almanak.framework.intents import Intent`.
 - State persists between iterations via `self.state` dict
 - Strategy prints `[STATUS]` for price/balance/portfolio/profit and `[ACTION]` for BUY/SELL/HOLD/ERROR decisions
 - Token handling supports symbol and address fallback for price, balance, and RSI queries.
-- Persistent keys include `entry_price`, `entry_ts`, and `last_buy_ts`.
+- Persistent keys include `entry_price`, `entry_ts`, `last_buy_ts`, `last_exit_attempt_ts`, and `last_exit_reason`.
+- Config supports compounding and gas guard controls (`compound_*`, `enable_gas_guard`, `estimated_*_gas_usd`, `min_net_profit_usd`).
+
+## Current Config Defaults
+
+- `trade_amount_usd=1`, `max_trade_amount_usd=5`
+- `buy_rsi=50`, `take_profit_pct=0.025`, `stop_loss_pct=0.02`
+- `cooldown_minutes=10`, `max_hold_minutes=180`
+- `buy_max_slippage=0.012`, `sell_max_slippage=0.03`, `failed_exit_max_slippage=0.05`
+- `exit_retry_cooldown_minutes=5`, `exit_escalation_window_minutes=20`
+- `compound_profits=true`, `compound_factor=0.75`
+- `enable_gas_guard=true`, `estimated_buy_gas_usd=0.004`, `estimated_sell_gas_usd=0.004`, `gas_safety_multiplier=1.8`, `min_net_profit_usd=0.004`
 
 ## Testing
 

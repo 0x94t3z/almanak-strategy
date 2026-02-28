@@ -10,7 +10,23 @@ Automated DEGEN/USDC strategy on Base using the Almanak SDK.
 - Exit rules: take profit at `take_profit_pct`, stop loss at `stop_loss_pct`, and time-based profit exit at `max_hold_minutes`
 - Position sizing and risk use `trade_amount_usd` (with optional compounding), enforce `min_trade_amount_usd`, use separate buy/sell slippage, include exit retry cooldown/escalation, and apply a gas guard for low-edge trades.
 
-Current defaults in [config.json](/Users/0xgets/my_strategy/config.json) are tuned for small-size testing (`$1`).
+Current defaults in [config.json](/Users/0xgets/my_strategy/config.json) are tuned for small-size testing (`$1`) with a safer live profile.
+
+## Current Profile (v2.6)
+
+- `trade_amount_usd`: `1`
+- `max_trade_amount_usd`: `5`
+- `buy_rsi`: `50`
+- `take_profit_pct`: `0.025`
+- `stop_loss_pct`: `0.02`
+- `cooldown_minutes`: `10`
+- `compound_profits`: `true`
+- `compound_factor`: `0.75`
+- `enable_gas_guard`: `true`
+- `estimated_buy_gas_usd`: `0.004`
+- `estimated_sell_gas_usd`: `0.004`
+- `gas_safety_multiplier`: `1.8`
+- `min_net_profit_usd`: `0.004`
 
 ## Compounding Behavior
 
@@ -81,6 +97,12 @@ Live single iteration (real execution):
 
 ```bash
 almanak strat run --once --no-gateway --gateway-port 50130
+```
+
+Live continuous mode:
+
+```bash
+almanak strat run --no-gateway --gateway-port 50130
 ```
 
 Start standalone gateway on Base:
