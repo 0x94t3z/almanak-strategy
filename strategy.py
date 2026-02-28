@@ -54,11 +54,24 @@ class MyStrategyStrategy(IntentStrategy):
         self.sell_fraction = self._to_decimal(cfg.get("sell_fraction", "1.0"), Decimal("1.0"))
         self.min_base_position = self._to_decimal(cfg.get("min_base_position", "0.000001"), Decimal("0.000001"))
         self.max_slippage = self._to_decimal(cfg.get("max_slippage", "0.005"), Decimal("0.005"))
+        self.buy_max_slippage = self._to_decimal(cfg.get("buy_max_slippage", self.max_slippage), self.max_slippage)
+        default_sell_slippage = self.max_slippage if self.max_slippage >= Decimal("0.03") else Decimal("0.03")
+        self.sell_max_slippage = self._to_decimal(cfg.get("sell_max_slippage", default_sell_slippage), default_sell_slippage)
+        self.failed_exit_max_slippage = self._to_decimal(
+            cfg.get("failed_exit_max_slippage", self.sell_max_slippage),
+            self.sell_max_slippage,
+        )
+        if self.failed_exit_max_slippage < self.sell_max_slippage:
+            self.failed_exit_max_slippage = self.sell_max_slippage
+        self.exit_retry_cooldown_minutes = int(cfg.get("exit_retry_cooldown_minutes", 5))
+        self.exit_escalation_window_minutes = int(cfg.get("exit_escalation_window_minutes", 20))
         self.enforce_profit_only_exit = bool(cfg.get("enforce_profit_only_exit", False))
 
         self._entry_price: Decimal | None = None
         self._entry_ts: int | None = None
         self._last_buy_ts: int | None = None
+        self._last_exit_attempt_ts: int | None = None
+        self._last_exit_reason: str | None = None
         self._last_portfolio_value_usd = Decimal("0")
         self._last_total_profit_usd = Decimal("0")
         self._last_total_profit_pct = Decimal("0")
@@ -148,18 +161,65 @@ class MyStrategyStrategy(IntentStrategy):
             "entry_price": str(self._entry_price) if self._entry_price is not None else None,
             "entry_ts": self._entry_ts,
             "last_buy_ts": self._last_buy_ts,
+            "last_exit_attempt_ts": self._last_exit_attempt_ts,
+            "last_exit_reason": self._last_exit_reason,
         }
 
     def load_persistent_state(self, state: dict[str, Any]) -> None:
         self._entry_price = self._to_decimal(state.get("entry_price"), Decimal("0")) if state.get("entry_price") else None
         self._entry_ts = state.get("entry_ts")
         self._last_buy_ts = state.get("last_buy_ts")
+        self._last_exit_attempt_ts = state.get("last_exit_attempt_ts")
+        self._last_exit_reason = state.get("last_exit_reason")
 
     def _compute_buy_amount_usd(self, quote_balance: Decimal) -> Decimal:
         spendable = quote_balance - self.min_quote_reserve_usd
         if spendable <= 0:
             return Decimal("0")
         return min(self.trade_amount_usd, spendable)
+
+    def _can_retry_exit(self, now_ts: int) -> bool:
+        if self._last_exit_attempt_ts is None:
+            return True
+        cooldown_seconds = self.exit_retry_cooldown_minutes * 60
+        return (now_ts - self._last_exit_attempt_ts) >= cooldown_seconds
+
+    def _exit_slippage_for_attempt(self, now_ts: int) -> Decimal:
+        if self._last_exit_attempt_ts is None:
+            return self.sell_max_slippage
+        escalation_seconds = self.exit_escalation_window_minutes * 60
+        if (now_ts - self._last_exit_attempt_ts) <= escalation_seconds:
+            return self.failed_exit_max_slippage
+        return self.sell_max_slippage
+
+    def _build_exit_intent(
+        self,
+        now_ts: int,
+        base_balance: Decimal,
+        trigger_label: str,
+        trigger_detail: str,
+    ) -> Any:
+        if not self._can_retry_exit(now_ts):
+            wait_seconds = (self.exit_retry_cooldown_minutes * 60) - (now_ts - (self._last_exit_attempt_ts or now_ts))
+            reason = (
+                f"Exit cooldown active after recent {self._last_exit_reason or 'exit'} attempt; "
+                f"retry in {max(wait_seconds, 0)}s"
+            )
+            self._print_action("HOLD", reason)
+            return Intent.hold(reason=reason)
+
+        exit_slippage = self._exit_slippage_for_attempt(now_ts)
+        self._last_exit_attempt_ts = now_ts
+        self._last_exit_reason = trigger_label
+        self._print_action("SELL", f"{trigger_detail}; slippage={exit_slippage * Decimal('100'):.2f}%")
+        return Intent.swap(
+            from_token=self.base_token_trade_id,
+            to_token=self.quote_token,
+            amount=base_balance * self.sell_fraction,
+            max_slippage=exit_slippage,
+            protocol=self.swap_protocol,
+            chain=self.chain,
+        )
 
     def decide(self, market: Any) -> Any:
         try:
@@ -230,6 +290,8 @@ class MyStrategyStrategy(IntentStrategy):
                 # Position has likely closed, reset entry tracking.
                 self._entry_price = None
                 self._entry_ts = None
+                self._last_exit_attempt_ts = None
+                self._last_exit_reason = None
 
             if position_open and self._entry_price is None:
                 # Fallback when strategy restarts with an existing position.
@@ -246,45 +308,29 @@ class MyStrategyStrategy(IntentStrategy):
                 )
 
                 if pnl_pct >= self.take_profit_pct:
-                    self._print_action(
-                        "SELL",
-                        f"Take profit hit at {pnl_pct * Decimal('100'):.2f}%",
-                    )
-                    return Intent.swap(
-                        from_token=self.base_token_trade_id,
-                        to_token=self.quote_token,
-                        amount=base_balance * self.sell_fraction,
-                        max_slippage=self.max_slippage,
-                        protocol=self.swap_protocol,
-                        chain=self.chain,
+                    return self._build_exit_intent(
+                        now_ts=now_ts,
+                        base_balance=base_balance,
+                        trigger_label="take_profit",
+                        trigger_detail=f"Take profit hit at {pnl_pct * Decimal('100'):.2f}%",
                     )
 
                 if not self.enforce_profit_only_exit and pnl_pct <= -self.stop_loss_pct:
-                    self._print_action(
-                        "SELL",
-                        f"Stop loss hit at {pnl_pct * Decimal('100'):.2f}%",
-                    )
-                    return Intent.swap(
-                        from_token=self.base_token_trade_id,
-                        to_token=self.quote_token,
-                        amount=base_balance * self.sell_fraction,
-                        max_slippage=self.max_slippage,
-                        protocol=self.swap_protocol,
-                        chain=self.chain,
+                    return self._build_exit_intent(
+                        now_ts=now_ts,
+                        base_balance=base_balance,
+                        trigger_label="stop_loss",
+                        trigger_detail=f"Stop loss hit at {pnl_pct * Decimal('100'):.2f}%",
                     )
 
                 if held_minutes >= self.max_hold_minutes and pnl_pct > 0:
-                    self._print_action(
-                        "SELL",
-                        f"Time exit after {held_minutes:.1f}m with profit {pnl_pct * Decimal('100'):.2f}%",
-                    )
-                    return Intent.swap(
-                        from_token=self.base_token_trade_id,
-                        to_token=self.quote_token,
-                        amount=base_balance * self.sell_fraction,
-                        max_slippage=self.max_slippage,
-                        protocol=self.swap_protocol,
-                        chain=self.chain,
+                    return self._build_exit_intent(
+                        now_ts=now_ts,
+                        base_balance=base_balance,
+                        trigger_label="time_exit",
+                        trigger_detail=(
+                            f"Time exit after {held_minutes:.1f}m with profit {pnl_pct * Decimal('100'):.2f}%"
+                        ),
                     )
 
                 reason = (
@@ -319,6 +365,8 @@ class MyStrategyStrategy(IntentStrategy):
                 self._entry_price = price
                 self._entry_ts = now_ts
                 self._last_buy_ts = now_ts
+                self._last_exit_attempt_ts = None
+                self._last_exit_reason = None
                 self._print_action(
                     "BUY",
                     f"RSI {rsi} below {self.buy_rsi}; deploying ${buy_amount_usd:.4f}",
@@ -327,7 +375,7 @@ class MyStrategyStrategy(IntentStrategy):
                     from_token=self.quote_token,
                     to_token=self.base_token_trade_id,
                     amount_usd=buy_amount_usd,
-                    max_slippage=self.max_slippage,
+                    max_slippage=self.buy_max_slippage,
                     protocol=self.swap_protocol,
                     chain=self.chain,
                 )
@@ -356,12 +404,19 @@ class MyStrategyStrategy(IntentStrategy):
             "quote_token_symbol": self.quote_token_symbol,
             "quote_token_address": self.quote_token_address if self.quote_token_address else None,
             "swap_protocol": self.swap_protocol,
+            "buy_max_slippage": str(self.buy_max_slippage),
+            "sell_max_slippage": str(self.sell_max_slippage),
+            "failed_exit_max_slippage": str(self.failed_exit_max_slippage),
+            "exit_retry_cooldown_minutes": self.exit_retry_cooldown_minutes,
+            "exit_escalation_window_minutes": self.exit_escalation_window_minutes,
             "min_trade_amount_usd": str(self.min_trade_amount_usd),
             "min_quote_reserve_usd": str(self.min_quote_reserve_usd),
             "buy_rsi": str(self.buy_rsi),
             "take_profit_pct": str(self.take_profit_pct),
             "stop_loss_pct": str(self.stop_loss_pct),
             "entry_price": str(self._entry_price) if self._entry_price is not None else None,
+            "last_exit_attempt_ts": self._last_exit_attempt_ts,
+            "last_exit_reason": self._last_exit_reason,
             "starting_capital_usd": str(self.starting_capital_usd),
             "portfolio_value_usd": str(self._last_portfolio_value_usd),
             "total_profit_usd": str(self._last_total_profit_usd),

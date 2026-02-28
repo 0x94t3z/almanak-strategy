@@ -1,6 +1,6 @@
 {
   "name": "base_degen_profit_target",
-  "version": "2.3",
+  "version": "2.4",
   "author": "0x94t3z",
   "chain": "base",
   "interval": 60,
@@ -26,6 +26,11 @@
   "sell_fraction": 1.0,
   "min_base_position": 0.000001,
   "max_slippage": 0.012,
+  "buy_max_slippage": 0.012,
+  "sell_max_slippage": 0.03,
+  "failed_exit_max_slippage": 0.05,
+  "exit_retry_cooldown_minutes": 5,
+  "exit_escalation_window_minutes": 20,
   "enforce_profit_only_exit": false,
   "anvil_funding": {
     "USDC": 1
