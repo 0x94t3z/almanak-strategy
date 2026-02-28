@@ -8,9 +8,33 @@ Automated DEGEN/USDC strategy on Base using the Almanak SDK.
 - Pair: DEGEN / USDC
 - Entry: Buys when RSI is below `buy_rsi`
 - Exit rules: take profit at `take_profit_pct`, stop loss at `stop_loss_pct`, and time-based profit exit at `max_hold_minutes`
-- Position sizing and risk: uses `trade_amount_usd`, enforces `min_trade_amount_usd`, and applies `max_slippage`
+- Position sizing and risk use `trade_amount_usd` (with optional compounding), enforce `min_trade_amount_usd`, use separate buy/sell slippage, include exit retry cooldown/escalation, and apply a gas guard for low-edge trades.
 
 Current defaults in [config.json](/Users/0xgets/my_strategy/config.json) are tuned for small-size testing (`$1`).
+
+## Compounding Behavior
+
+When `compound_profits` is enabled, buy size can increase from realized portfolio profit:
+
+- Base buy size starts from `trade_amount_usd`
+- Extra size is `max(0, total_profit_usd) * compound_factor`
+- Example: if base is `$1.00` and profit is `$0.10`, next target buy is about `$1.10`
+
+Use `max_trade_amount_usd` to cap compounding size.
+
+## Gas Guard
+
+Gas guard helps avoid trades where expected edge is too small for gas cost.
+
+Key config fields:
+
+- `enable_gas_guard`
+- `estimated_buy_gas_usd`
+- `estimated_sell_gas_usd`
+- `gas_safety_multiplier`
+- `min_net_profit_usd`
+
+If the guard blocks a trade, logs show an `[ACTION] HOLD` reason.
 
 ## Project Files
 

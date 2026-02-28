@@ -41,6 +41,7 @@ class MyStrategyStrategy(IntentStrategy):
         self.rsi_timeframe = str(cfg.get("rsi_timeframe", "1h"))
         self.buy_rsi = self._to_decimal(cfg.get("buy_rsi", 38), Decimal("38"))
         self.trade_amount_usd = self._to_decimal(cfg.get("trade_amount_usd", 250), Decimal("250"))
+        self.max_trade_amount_usd = self._to_decimal(cfg.get("max_trade_amount_usd", "0"), Decimal("0"))
         self.min_trade_amount_usd = self._to_decimal(cfg.get("min_trade_amount_usd", "1"), Decimal("1"))
         self.min_quote_reserve_usd = self._to_decimal(cfg.get("min_quote_reserve_usd", "0"), Decimal("0"))
         self.starting_capital_usd = self._to_decimal(
@@ -65,6 +66,13 @@ class MyStrategyStrategy(IntentStrategy):
             self.failed_exit_max_slippage = self.sell_max_slippage
         self.exit_retry_cooldown_minutes = int(cfg.get("exit_retry_cooldown_minutes", 5))
         self.exit_escalation_window_minutes = int(cfg.get("exit_escalation_window_minutes", 20))
+        self.compound_profits = bool(cfg.get("compound_profits", True))
+        self.compound_factor = self._to_decimal(cfg.get("compound_factor", "1.0"), Decimal("1.0"))
+        self.enable_gas_guard = bool(cfg.get("enable_gas_guard", True))
+        self.estimated_buy_gas_usd = self._to_decimal(cfg.get("estimated_buy_gas_usd", "0.03"), Decimal("0.03"))
+        self.estimated_sell_gas_usd = self._to_decimal(cfg.get("estimated_sell_gas_usd", "0.03"), Decimal("0.03"))
+        self.gas_safety_multiplier = self._to_decimal(cfg.get("gas_safety_multiplier", "2.0"), Decimal("2.0"))
+        self.min_net_profit_usd = self._to_decimal(cfg.get("min_net_profit_usd", "0.03"), Decimal("0.03"))
         self.enforce_profit_only_exit = bool(cfg.get("enforce_profit_only_exit", False))
 
         self._entry_price: Decimal | None = None
@@ -176,7 +184,49 @@ class MyStrategyStrategy(IntentStrategy):
         spendable = quote_balance - self.min_quote_reserve_usd
         if spendable <= 0:
             return Decimal("0")
-        return min(self.trade_amount_usd, spendable)
+        if not self.compound_profits:
+            target = self.trade_amount_usd
+        else:
+            profit_component = max(Decimal("0"), self._last_total_profit_usd) * self.compound_factor
+            target = self.trade_amount_usd + profit_component
+        if self.max_trade_amount_usd > 0:
+            target = min(target, self.max_trade_amount_usd)
+        return min(target, spendable)
+
+    def _round_trip_gas_buffer_usd(self) -> Decimal:
+        return (self.estimated_buy_gas_usd + self.estimated_sell_gas_usd) * self.gas_safety_multiplier
+
+    def _sell_gas_buffer_usd(self) -> Decimal:
+        return self.estimated_sell_gas_usd * self.gas_safety_multiplier
+
+    def _entry_passes_gas_guard(self, buy_amount_usd: Decimal) -> tuple[bool, str]:
+        if not self.enable_gas_guard:
+            return True, ""
+        expected_gross_profit = buy_amount_usd * self.take_profit_pct
+        required_profit = self._round_trip_gas_buffer_usd() + self.min_net_profit_usd
+        if expected_gross_profit >= required_profit:
+            return True, ""
+        return (
+            False,
+            (
+                f"Gas guard blocked buy: expected_profit=${expected_gross_profit:.4f} "
+                f"< required=${required_profit:.4f}"
+            ),
+        )
+
+    def _exit_passes_gas_guard(self, pnl_usd: Decimal) -> tuple[bool, str]:
+        if not self.enable_gas_guard:
+            return True, ""
+        required_profit = self._sell_gas_buffer_usd() + self.min_net_profit_usd
+        if pnl_usd >= required_profit:
+            return True, ""
+        return (
+            False,
+            (
+                f"Gas guard blocked sell: pnl=${pnl_usd:.4f} "
+                f"< required=${required_profit:.4f}"
+            ),
+        )
 
     def _can_retry_exit(self, now_ts: int) -> bool:
         if self._last_exit_attempt_ts is None:
@@ -301,6 +351,7 @@ class MyStrategyStrategy(IntentStrategy):
             if position_open and self._entry_price is not None:
                 entry_price = self._entry_price
                 pnl_pct = (price - entry_price) / entry_price if entry_price > 0 else Decimal("0")
+                pnl_usd = base_balance * (price - entry_price)
                 held_minutes = (
                     (now_ts - self._entry_ts) / 60
                     if self._entry_ts is not None
@@ -308,6 +359,10 @@ class MyStrategyStrategy(IntentStrategy):
                 )
 
                 if pnl_pct >= self.take_profit_pct:
+                    ok, reason = self._exit_passes_gas_guard(pnl_usd)
+                    if not ok:
+                        self._print_action("HOLD", reason)
+                        return Intent.hold(reason=reason)
                     return self._build_exit_intent(
                         now_ts=now_ts,
                         base_balance=base_balance,
@@ -324,6 +379,10 @@ class MyStrategyStrategy(IntentStrategy):
                     )
 
                 if held_minutes >= self.max_hold_minutes and pnl_pct > 0:
+                    ok, reason = self._exit_passes_gas_guard(pnl_usd)
+                    if not ok:
+                        self._print_action("HOLD", reason)
+                        return Intent.hold(reason=reason)
                     return self._build_exit_intent(
                         now_ts=now_ts,
                         base_balance=base_balance,
@@ -362,6 +421,10 @@ class MyStrategyStrategy(IntentStrategy):
                 return Intent.hold(reason=reason)
 
             if rsi < self.buy_rsi and buy_amount_usd >= self.min_trade_amount_usd:
+                ok, reason = self._entry_passes_gas_guard(buy_amount_usd)
+                if not ok:
+                    self._print_action("HOLD", reason)
+                    return Intent.hold(reason=reason)
                 self._entry_price = price
                 self._entry_ts = now_ts
                 self._last_buy_ts = now_ts
@@ -404,6 +467,14 @@ class MyStrategyStrategy(IntentStrategy):
             "quote_token_symbol": self.quote_token_symbol,
             "quote_token_address": self.quote_token_address if self.quote_token_address else None,
             "swap_protocol": self.swap_protocol,
+            "compound_profits": self.compound_profits,
+            "compound_factor": str(self.compound_factor),
+            "max_trade_amount_usd": str(self.max_trade_amount_usd),
+            "enable_gas_guard": self.enable_gas_guard,
+            "estimated_buy_gas_usd": str(self.estimated_buy_gas_usd),
+            "estimated_sell_gas_usd": str(self.estimated_sell_gas_usd),
+            "gas_safety_multiplier": str(self.gas_safety_multiplier),
+            "min_net_profit_usd": str(self.min_net_profit_usd),
             "buy_max_slippage": str(self.buy_max_slippage),
             "sell_max_slippage": str(self.sell_max_slippage),
             "failed_exit_max_slippage": str(self.failed_exit_max_slippage),

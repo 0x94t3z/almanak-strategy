@@ -1,6 +1,6 @@
 {
   "name": "base_degen_profit_target",
-  "version": "2.4",
+  "version": "2.5",
   "author": "0x94t3z",
   "chain": "base",
   "interval": 60,
@@ -14,6 +14,7 @@
   "swap_protocol": "uniswap_v3",
   "starting_capital_usd": 1,
   "trade_amount_usd": 1,
+  "max_trade_amount_usd": 0,
   "min_trade_amount_usd": 1,
   "min_quote_reserve_usd": 0,
   "rsi_period": 14,
@@ -31,6 +32,13 @@
   "failed_exit_max_slippage": 0.05,
   "exit_retry_cooldown_minutes": 5,
   "exit_escalation_window_minutes": 20,
+  "compound_profits": true,
+  "compound_factor": 1.0,
+  "enable_gas_guard": true,
+  "estimated_buy_gas_usd": 0.003,
+  "estimated_sell_gas_usd": 0.003,
+  "gas_safety_multiplier": 1.5,
+  "min_net_profit_usd": 0.002,
   "enforce_profit_only_exit": false,
   "anvil_funding": {
     "USDC": 1
