@@ -8,15 +8,18 @@
 - **Chain:** base
 - **Class:** `MyStrategyStrategy` in `strategy.py`
 - **Config:** `config.json`
+- **Default Pair:** DEGEN/USDC on Base
+- **Default Protocol:** `uniswap_v3`
 
 ## Files
 
 | File | Purpose |
 |------|---------|
-| `strategy.py` | Main strategy - edit `decide()` to change trading logic |
-| `config.json` | Runtime parameters (tokens, thresholds, chain) |
+| `strategy.py` | Main strategy - edit `decide()` to change entry/exit logic |
+| `config.json` | Runtime parameters (tokens, thresholds, protocol, risk) |
 | `.env` | Secrets (private key, API keys) - never commit this |
 | `tests/test_strategy.py` | Unit tests for the strategy |
+| `README.md` | Project setup and runbook |
 
 ## How to Run
 
@@ -24,21 +27,25 @@
 # Single iteration on Anvil fork (safe, no real funds)
 almanak strat run --network anvil --once
 
-# Single iteration on mainnet
-almanak strat run --once
+# Single iteration on mainnet (managed gateway)
+almanak strat run --once --gateway-port 50110
 
-# Continuous with 30s interval
-almanak strat run --network anvil --interval 30
+# Standalone gateway (Base only)
+almanak gateway --port 50130 --chains base
 
-# Dry run (no transactions)
-almanak strat run --dry-run --once
+# Dry run against existing gateway
+almanak strat run --once --dry-run --no-gateway --gateway-port 50130
+
+# Live run against existing gateway
+almanak strat run --once --no-gateway --gateway-port 50130
 ```
 
 ## Intent Types Used
 
 This strategy uses these intent types:
 
-- `Intent.swap(from_token, to_token, amount_usd=, max_slippage=Decimal("0.005"))`
+- `Intent.swap(from_token, to_token, amount_usd=, max_slippage=..., protocol=..., chain=...)`
+- `Intent.swap(from_token, to_token, amount=, max_slippage=..., protocol=..., chain=...)`
 - `Intent.hold(reason="...")`
 
 All intents are created via `from almanak.framework.intents import Intent`.
@@ -50,6 +57,9 @@ All intents are created via `from almanak.framework.intents import Intent`.
 - Always wrap `decide()` logic in try/except, returning `Intent.hold()` on error
 - Config values are read via `self.config.get("key", default)` in `__init__`
 - State persists between iterations via `self.state` dict
+- Strategy prints `[STATUS]` for price/balance/portfolio/profit and `[ACTION]` for BUY/SELL/HOLD/ERROR decisions
+- Token handling supports symbol and address fallback for price, balance, and RSI queries.
+- Persistent keys include `entry_price`, `entry_ts`, and `last_buy_ts`.
 
 ## Testing
 
@@ -63,6 +73,12 @@ almanak strat backtest paper --duration 3600 --interval 60
 # PnL backtest (historical prices)
 almanak strat backtest pnl --start 2024-01-01 --end 2024-06-01
 ```
+
+## Environment Notes
+
+- For live execution, both strategy and gateway need a private key: `ALMANAK_PRIVATE_KEY` and `ALMANAK_GATEWAY_PRIVATE_KEY`.
+- If gateway auth is enabled, set both `ALMANAK_GATEWAY_AUTH_TOKEN` and `GATEWAY_AUTH_TOKEN`.
+- `ALMANAK_GATEWAY_ALLOW_INSECURE=true` is for local testing only.
 
 ## Full SDK Reference
 

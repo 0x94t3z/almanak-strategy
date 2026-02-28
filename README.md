@@ -1,0 +1,72 @@
+# Almanak Strategy
+
+Automated DEGEN/USDC strategy on Base using the Almanak SDK.
+
+## What This Strategy Does
+
+- Chain: Base
+- Pair: DEGEN / USDC
+- Entry: Buys when RSI is below `buy_rsi`
+- Exit rules: take profit at `take_profit_pct`, stop loss at `stop_loss_pct`, and time-based profit exit at `max_hold_minutes`
+- Position sizing and risk: uses `trade_amount_usd`, enforces `min_trade_amount_usd`, and applies `max_slippage`
+
+Current defaults in [config.json](/Users/0xgets/my_strategy/config.json) are tuned for small-size testing (`$1`).
+
+## Project Files
+
+- [strategy.py](/Users/0xgets/my_strategy/strategy.py): main strategy logic
+- [config.json](/Users/0xgets/my_strategy/config.json): runtime parameters
+- [.env](/Users/0xgets/my_strategy/.env): secrets and gateway/rpc settings (do not commit)
+- [tests/test_strategy.py](/Users/0xgets/my_strategy/tests/test_strategy.py): unit tests
+- [AGENTS.md](/Users/0xgets/my_strategy/AGENTS.md): coding agent guidance
+
+## Setup
+
+1. Install dependencies in your virtualenv.
+2. Configure `.env` with at least:
+
+```bash
+ALMANAK_PRIVATE_KEY=0x...
+ALMANAK_GATEWAY_PRIVATE_KEY=0x...
+ALMANAK_GATEWAY_AUTH_TOKEN=your_token_here
+GATEWAY_AUTH_TOKEN=your_token_here
+ALMANAK_BASE_RPC_URL=https://base-mainnet.g.alchemy.com/v2/...
+```
+
+If you run a local gateway without auth for testing only:
+
+```bash
+ALMANAK_GATEWAY_ALLOW_INSECURE=true
+```
+
+## Run Commands
+
+Safe dry run on managed gateway:
+
+```bash
+almanak strat run --once --dry-run
+```
+
+Use an existing gateway:
+
+```bash
+almanak strat run --once --dry-run --no-gateway --gateway-port 50130
+```
+
+Live single iteration (real execution):
+
+```bash
+almanak strat run --once --no-gateway --gateway-port 50130
+```
+
+Start standalone gateway on Base:
+
+```bash
+almanak gateway --port 50130 --chains base
+```
+
+## Notes
+
+- Strategy logs print status and action decisions every iteration.
+- State persists in `almanak_state.db` and resumes open-position context.
+- This is not guaranteed-profit software. Use dry-run and small size before scaling.
